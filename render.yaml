@@ -3,4 +3,4 @@ services:
     name: sistema-mapa-operacional
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn sistema_obras.app.app:app
