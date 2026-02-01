@@ -132,6 +132,10 @@ def limpar_dados():
     db_projetos = []
     return redirect(url_for('programacao_geral'))
 
+@app.route('/semanal')
+def semanal():
+    return render_template('semanal.html')
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
