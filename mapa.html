@@ -1,0 +1,220 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Inter:wght@400;700;800&display=swap" rel="stylesheet">
+
+<div class="container-fluid py-2" id="mapa-container">
+    <div class="header-nav d-flex flex-wrap justify-content-between align-items-center mb-3 no-print">
+        <div class="d-flex align-items-center gap-3">
+            <div>
+                <h5 class="text-white fw-bold mb-0">MAPA <span class="text-info">OPERACIONAL</span></h5>
+                <small class="text-white-50">{% if base_ativa %}{{ base_ativa|upper }}{% else %}GERAL{% endif %}</small>
+            </div>
+
+            <form method="GET" action="{{ url_for('mapa') }}" class="d-flex gap-2 ms-3 align-items-center p-2 rounded shadow-sm" style="background: rgba(0,0,0,0.4); border: 1px solid #30363d;">
+                <input type="hidden" name="base" value="{{ base_ativa or '' }}">
+                
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text bg-transparent text-white-50 border-0"><i class="fas fa-calendar-alt"></i></span>
+                    <select name="mes" class="form-select bg-dark text-info border-secondary" onchange="this.form.submit()">
+                        <option value="">TODOS OS MESES</option>
+                        {% set meses = [('01', 'Jan'), ('02', 'Fev'), ('03', 'Mar'), ('04', 'Abr'), ('05', 'Mai'), ('06', 'Jun'), 
+                                       ('07', 'Jul'), ('08', 'Ago'), ('09', 'Set'), ('10', 'Out'), ('11', 'Nov'), ('12', 'Dez')] %}
+                        {% for val, nome in meses %}
+                            <option value="{{ val }}" {% if mes_sel == val %}selected{% endif %}>{{ nome }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text bg-transparent text-white-50 border-0"><i class="fas fa-layer-group"></i></span>
+                    <select name="semana" class="form-select bg-dark text-info border-secondary" onchange="this.form.submit()">
+                        <option value="">TODAS SEMANAS</option>
+                        {% for i in range(1, 6) %}
+                            <option value="{{ i }}" {% if semana_sel == i|string %}selected{% endif %}>Semana {{ i }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </form>
+        </div>
+        
+        <div class="d-flex gap-2 align-items-center">
+            <div class="btn-group btn-group-sm shadow-sm border border-secondary rounded">
+                <a href="{{ url_for('mapa', base='BACABAL', mes=mes_sel, semana=semana_sel) }}" class="btn btn-outline-info {% if base_ativa == 'BACABAL' %}active{% endif %}">BCB</a>
+                <a href="{{ url_for('mapa', base='ITAPECURU', mes=mes_sel, semana=semana_sel) }}" class="btn btn-outline-info {% if base_ativa == 'ITAPECURU' %}active{% endif %}">ITM</a>
+                <a href="{{ url_for('mapa', base='SANTA INES', mes=mes_sel, semana=semana_sel) }}" class="btn btn-outline-info {% if base_ativa == 'SANTA INES' %}active{% endif %}">STI</a>
+                <a href="{{ url_for('mapa', mes=mes_sel, semana=semana_sel) }}" class="btn btn-outline-secondary {% if not base_ativa or base_ativa == '' %}active{% endif %}">TODAS</a>
+            </div>
+
+            <div class="search-box">
+                <i class="fas fa-search text-info me-2"></i>
+                <input type="text" id="searchFilter" placeholder="Buscar PEP ou Local..." onkeyup="applyFilters()">
+            </div>
+
+            <button onclick="window.print()" class="btn btn-sm btn-success fw-bold"><i class="fas fa-print me-1"></i> PDF</button>
+        </div>
+    </div>
+
+    <div class="timeline-wrapper">
+        <div class="table-responsive custom-scrollbar" id="timeline-scroll">
+            <table class="table-timeline">
+                <thead>
+                    <tr>
+                        <th class="sticky-col-head">EQUIPES</th>
+                        {% for data_obj in datas_colunas %}
+                        <th class="sticky-row-head {% if data_obj.dia_num == 5 %}bg-sabado{% elif data_obj.dia_num == 6 %}bg-domingo{% endif %}">
+                            {{ data_obj.exibicao }}
+                        </th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for equipe in equipes %}
+                    <tr class="timeline-row">
+                        <td class="sticky-col-body">
+                            <div class="equipe-badge">{{ equipe }}</div>
+                        </td>
+                        {% for data_obj in datas_colunas %}
+                        <td class="cell-day">
+                            <div class="cell-flex-container">
+                                {% for p in projetos %}
+                                    {# Verificação robusta de equipe e data #}
+                                    {% if p.equipe|string|trim == equipe|string|trim and p.data|string|trim == data_obj.original|string|trim %}
+                                    <div class="card-os {% if 'MANHÃ' in p.periodo|upper %}morning{% elif 'TARDE' in p.periodo|upper %}afternoon{% else %}full{% endif %}"
+                                         data-search="{{ p.pep|upper }} {{ p.local|upper }} {{ equipe|upper }}">
+                                        <div class="card-id-code">{{ p.pep if p.pep and p.pep != "-" else p.nota }}</div>
+                                        <div class="card-location"><i class="fas fa-location-dot"></i> {{ p.local }}</div>
+                                        <div class="card-condition">{{ p.condicao }}</div>
+                                    </div>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* LAYOUT BASE */
+    .table-responsive {
+        height: calc(100vh - 160px);
+        overflow: auto !important;
+        background: #161b22;
+        border-radius: 12px;
+        border: 1px solid #30363d;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar { height: 12px; width: 8px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #0d1117; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #58a6ff; border-radius: 10px; border: 3px solid #0d1117; }
+
+    .table-timeline { border-collapse: separate; border-spacing: 0; min-width: 100%; }
+
+    /* STICKY HEADERS */
+    .sticky-row-head {
+        position: sticky; top: 0; z-index: 10;
+        background: #1f242c !important;
+        padding: 12px 20px;
+        min-width: 280px;
+        border-bottom: 2px solid #30363d;
+        color: #58a6ff;
+        font-size: 0.85rem;
+        text-align: center;
+    }
+
+    .sticky-col-body {
+        position: sticky; left: 0; z-index: 5;
+        background: #161b22 !important;
+        border-right: 3px solid #58a6ff !important;
+        min-width: 150px;
+        padding: 15px 10px;
+    }
+
+    .sticky-col-head {
+        position: sticky; top: 0; left: 0; z-index: 20;
+        background: #000 !important;
+        border-right: 3px solid #58a6ff;
+        min-width: 150px;
+        color: white;
+        text-align: center;
+    }
+
+    /* CARDS E CONTEÚDO */
+    .cell-day { border-right: 1px solid #30363d; border-bottom: 1px solid #30363d; vertical-align: top; }
+    
+    .cell-flex-container { display: flex; flex-direction: column; gap: 10px; padding: 8px; }
+
+    .card-os {
+        background: white;
+        color: #1f2937;
+        border-radius: 8px;
+        padding: 10px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        border-left: 6px solid #666;
+        min-width: 240px;
+        transition: transform 0.2s;
+    }
+    .card-os:hover { transform: scale(1.02); }
+
+    .card-id-code { font-family: 'Roboto Mono'; font-weight: 800; color: #b91c1c; font-size: 0.9rem; }
+    .card-location { 
+        font-size: 0.75rem; font-weight: 600; margin: 4px 0; 
+        display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; 
+    }
+    .card-condition { font-size: 0.65rem; background: #eff6ff; color: #1d4ed8; padding: 2px 6px; border-radius: 4px; font-weight: 700; display: inline-block; }
+
+    /* CORES POR PERÍODO */
+    .morning { border-left-color: #ffc107 !important; }
+    .afternoon { border-left-color: #0dcaf0 !important; }
+    .full { border-left-color: #198754 !important; }
+
+    /* DIAS ESPECIAIS */
+    .bg-sabado { background-color: #ffd700 !important; color: #000 !important; }
+    .bg-domingo { background-color: #ff4d4d !important; color: #fff !important; }
+
+    /* FILTROS E BUSCA */
+    .search-box { background: #000; border: 1px solid #30363d; border-radius: 6px; padding: 4px 10px; display: flex; align-items: center; }
+    .search-box input { background: transparent; border: none; color: white; outline: none; font-size: 0.8rem; width: 150px; }
+
+    @media print {
+        .no-print { display: none !important; }
+        .table-responsive { height: auto !important; overflow: visible !important; }
+        .sticky-row-head, .sticky-col-head, .sticky-col-body { position: static !important; }
+        .card-os { box-shadow: none; border: 1px solid #ddd; page-break-inside: avoid; }
+    }
+</style>
+
+<script>
+    function applyFilters() {
+        const searchVal = document.getElementById('searchFilter').value.toUpperCase();
+        const rows = document.querySelectorAll('.timeline-row');
+
+        rows.forEach(row => {
+            const cards = row.querySelectorAll('.card-os');
+            let rowHasVisibleCard = false;
+
+            cards.forEach(card => {
+                const searchData = card.getAttribute('data-search');
+                if (searchData.includes(searchVal)) {
+                    card.style.display = 'block';
+                    rowHasVisibleCard = true;
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+
+            // Oculta a linha inteira se não houver nenhum card correspondente nela
+            if (searchVal === "") {
+                row.style.display = '';
+            } else {
+                row.style.display = rowHasVisibleCard ? '' : 'none';
+            }
+        });
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+
+{% block title %}Início{% endblock %}
+
+{% block content %}
+<div class="container text-center mt-5">
+  <h1 class="display-4 mb-4">Bem-vindo ao Sistema de Gestão de Obras</h1>
+  <p class="lead">Uma solução completa para gerenciar seus projetos de construção.</p>
+  <!-- Você pode adicionar um logotipo ou imagem aqui -->
+  <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo da Empresa" class="img-fluid mt-4" style="max-width: 300px;">
+</div>
+{% endblock %}
