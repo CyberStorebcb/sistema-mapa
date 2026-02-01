@@ -1,1 +1,1 @@
-web: gunicorn app:app
+web: gunicorn sistema_obras.app.app:app
