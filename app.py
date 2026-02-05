@@ -5,12 +5,10 @@ from flask import Flask, render_template, request, redirect, url_for, flash
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-# Em produção, o Render pode usar uma variável de ambiente, ou usa a string padrão
-app.secret_key = os.environ.get('SECRET_KEY', 'supersecretkey-mapa-123')
-app.config['UPLOAD_FOLDER'] = 'uploads'
+app.secret_key = os.environ.get('SECRET_KEY', 'supersecretkey-mapa-2024')
+app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Banco de dados em memória (Nota: No plano grátis do Render, os dados resetam se o app dormir)
 db_projetos = []
 
 def normalizar_texto(texto):
@@ -27,6 +25,8 @@ def programacao_geral():
     exibicao = db_projetos if db_projetos else []
     return render_template('programacao_geral.html', projetos=exibicao)
 
+# ...demais rotas e funções conforme seu código original...
+
 @app.route('/importar_excel', methods=['POST'])
 def importar_excel():
     global db_projetos
@@ -40,10 +40,13 @@ def importar_excel():
         return redirect(url_for('programacao_geral'))
 
     try:
-        # header=3 pula as primeiras linhas conforme a estrutura do seu Excel
+        print("[DEBUG] Iniciando leitura do arquivo Excel...")
         df = pd.read_excel(file, header=3)
+        print("[DEBUG] DataFrame lido:", df.head())
         df = df.dropna(axis=1, how='all')
+        print("[DEBUG] DataFrame após dropna:", df.head())
         df.columns = [str(c).strip().upper() for c in df.columns]
+        print("[DEBUG] Colunas normalizadas:", df.columns)
 
         mapeamento = {
             'ID': 'id', 'DATA': 'data', 'PERÍODO': 'periodo', 'TIPO': 'tipo',
@@ -51,26 +54,47 @@ def importar_excel():
             'COM LV': 'com_lv', 'SI/NR': 'si_nr', 'PEP': 'pep', 'NOTA': 'nota',
             'LOCAL': 'local', 'STATUS': 'status', 'CONDIÇÃO': 'condicao', 'OBSERVAÇÃO': 'obs'
         }
+        print("[DEBUG] Mapeamento:", mapeamento)
         
-        df = df.rename(columns=mapeamento)
+        # Renomeia apenas as colunas presentes
+        df = df.rename(columns={k: v for k, v in mapeamento.items() if k in df.columns})
+        print("[DEBUG] DataFrame após renomear colunas:", df.head())
         
-        # Filtra linhas sem ID ou Equipe para evitar lixo
+        # Filtra linhas sem ID para evitar lixo
         if 'id' in df.columns:
             df = df.dropna(subset=['id'])
-        
+            print("[DEBUG] DataFrame após dropna id:", df.head())
+        else:
+            print("[ERRO] Coluna 'id' não encontrada após renomear. Colunas atuais:", df.columns)
+            flash("Coluna 'ID' não encontrada no arquivo Excel.")
+            return redirect(url_for('programacao_geral'))
+
         if 'data' in df.columns:
-            # Garante que a data seja tratada corretamente
             df['data'] = pd.to_datetime(df['data'], errors='coerce').dt.strftime('%d/%m/%Y')
+            print("[DEBUG] DataFrame após conversão de data:", df[['data']].head())
+        else:
+            print("[ERRO] Coluna 'data' não encontrada após renomear. Colunas atuais:", df.columns)
+            flash("Coluna 'DATA' não encontrada no arquivo Excel.")
+            return redirect(url_for('programacao_geral'))
 
         df = df.fillna("-")
+        print("[DEBUG] DataFrame após fillna:", df.head())
         
         colunas_validas = [c for c in mapeamento.values() if c in df.columns]
-        db_projetos = df[colunas_validas].to_dict(orient='records')
-        
-        flash(f'Sucesso! {len(db_projetos)} registros importados.')
+        print("[DEBUG] Colunas válidas:", colunas_validas)
+        if df.empty or len(df[colunas_validas]) == 0:
+            print("[ERRO] Nenhum registro válido encontrado após processamento.")
+            flash("Nenhum registro válido encontrado no arquivo Excel.")
+            db_projetos = []
+        else:
+            db_projetos = df[colunas_validas].to_dict(orient='records')
+            print(f"[DEBUG] db_projetos gerado com {len(db_projetos)} registros.")
+            flash(f'Sucesso! {len(db_projetos)} registros importados.')
     except Exception as e:
+        import traceback
+        print("[ERRO] Falha ao importar Excel:", e)
+        traceback.print_exc()
         flash(f'Erro ao processar: {e}')
-        
     return redirect(url_for('programacao_geral'))
 
 @app.route('/mapa')
@@ -94,21 +118,72 @@ def mapa():
             p['data'] = str(p.get('data', '')).strip()
             projetos_validos.append(p)
     
+    # Lógica de semanas personalizada para fevereiro, março e abril de 2026
+    def semana_custom(dt):
+        y = dt.year
+        m = dt.month
+        d = dt.day
+        # Semana 1 de fevereiro começa em 26/jan até 31/jan
+        if y == 2026:
+            if m == 1 and d >= 26:
+                return 1  # 26 a 31 de janeiro
+            if m == 2:
+                if 1 <= d <= 1:
+                    return 1  # 1 de fevereiro ainda é semana 1
+                if 2 <= d <= 7:
+                    return 2
+                if 8 <= d <= 14:
+                    return 3
+                if 15 <= d <= 21:
+                    return 4
+                if 22 <= d <= 28:
+                    return 5
+                if d >= 29:
+                    return 6
+            if m == 3:
+                if 1 <= d <= 7:
+                    return 1
+                if 8 <= d <= 14:
+                    return 2
+                if 15 <= d <= 21:
+                    return 3
+                if 22 <= d <= 28:
+                    return 4
+                if d >= 29:
+                    return 5
+            if m == 4:
+                if 1 <= d <= 4:
+                    return 1
+                if 5 <= d <= 11:
+                    return 2
+                if 12 <= d <= 18:
+                    return 3
+                if 19 <= d <= 25:
+                    return 4
+                if d >= 26:
+                    return 5
+        # Para outros meses, semana padrão
+        return ((d - 1) // 7) + 1
+
     projetos_filtrados = []
     for p in projetos_validos:
+        try:
+            data_projeto = datetime.strptime(p.get('data'), '%d/%m/%Y')
+        except:
+            continue
+        # Ajuste especial: semana 1 de fevereiro deve incluir 26-31 de janeiro
+        if mes_sel == '02' and semana_sel == '1':
+            if (data_projeto.month == 2 and semana_custom(data_projeto) == 1) or (data_projeto.month == 1 and data_projeto.day >= 26):
+                projetos_filtrados.append(p)
+            continue
+        # Filtro padrão
         if mes_sel:
-            try:
-                data_projeto = datetime.strptime(p.get('data'), '%d/%m/%Y')
-                if str(data_projeto.month).zfill(2) != mes_sel:
-                    continue
-            except: continue
-
+            if str(data_projeto.month).zfill(2) != mes_sel:
+                continue
         if semana_sel:
-            try:
-                data_projeto = datetime.strptime(p.get('data'), '%d/%m/%Y')
-                if str(data_projeto.isocalendar().week) != semana_sel:
-                    continue
-            except: continue
+            semana_proj = semana_custom(data_projeto)
+            if semana_proj is None or str(semana_proj) != semana_sel:
+                continue
         projetos_filtrados.append(p)
 
     projetos_validos = projetos_filtrados
@@ -160,18 +235,73 @@ def semanal():
     mes_sel = request.args.get('mes', '')
     semana_sel = request.args.get('semana', '')
     
+    # Lógica de semanas personalizada para fevereiro, março e abril de 2026
+    def semana_custom(dt):
+        y = dt.year
+        m = dt.month
+        d = dt.day
+        # Semana 1 de fevereiro começa em 26/jan até 31/jan
+        if y == 2026:
+            if m == 1 and d >= 26:
+                return 1  # 26 a 31 de janeiro
+            if m == 2:
+                if 1 <= d <= 1:
+                    return 1  # 1 de fevereiro ainda é semana 1
+                if 2 <= d <= 7:
+                    return 2
+                if 8 <= d <= 14:
+                    return 3
+                if 15 <= d <= 21:
+                    return 4
+                if 22 <= d <= 28:
+                    return 5
+                if d >= 29:
+                    return 6
+            if m == 3:
+                if 1 <= d <= 7:
+                    return 1
+                if 8 <= d <= 14:
+                    return 2
+                if 15 <= d <= 21:
+                    return 3
+                if 22 <= d <= 28:
+                    return 4
+                if d >= 29:
+                    return 5
+            if m == 4:
+                if 1 <= d <= 4:
+                    return 1
+                if 5 <= d <= 11:
+                    return 2
+                if 12 <= d <= 18:
+                    return 3
+                if 19 <= d <= 25:
+                    return 4
+                if d >= 26:
+                    return 5
+        # Para outros meses, semana padrão
+        return ((d - 1) // 7) + 1
+
+
     projetos_filtrados = []
     for p in db_projetos:
+        try:
+            data_projeto = datetime.strptime(p.get('data'), '%d/%m/%Y')
+        except:
+            continue
+        # Ajuste especial: semana 1 de fevereiro deve incluir 26-31 de janeiro
+        if mes_sel == '02' and semana_sel == '1':
+            if (data_projeto.month == 2 and semana_custom(data_projeto) == 1) or (data_projeto.month == 1 and data_projeto.day >= 26):
+                projetos_filtrados.append(p)
+            continue
+        # Filtro padrão
         if mes_sel:
-            try:
-                data_projeto = datetime.strptime(p.get('data'), '%d/%m/%Y')
-                if str(data_projeto.month).zfill(2) != mes_sel: continue
-            except: continue
+            if str(data_projeto.month).zfill(2) != mes_sel:
+                continue
         if semana_sel:
-            try:
-                data_projeto = datetime.strptime(p.get('data'), '%d/%m/%Y')
-                if str(data_projeto.isocalendar().week) != semana_sel: continue
-            except: continue
+            semana_proj = semana_custom(data_projeto)
+            if semana_proj is None or str(semana_proj) != semana_sel:
+                continue
         projetos_filtrados.append(p)
 
     datas_em_dados = [p.get('data') for p in projetos_filtrados if p.get('data') != "-"]
@@ -180,8 +310,10 @@ def semanal():
             dt_objetos = [datetime.strptime(d, '%d/%m/%Y') for d in datas_em_dados]
             intervalo = pd.date_range(start=min(dt_objetos), end=max(dt_objetos))
             datas_lista = [d.strftime('%d/%m/%Y') for d in intervalo]
-        except: datas_lista = []
-    else: datas_lista = []
+        except:
+            datas_lista = []
+    else:
+        datas_lista = []
 
     dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
     datas_colunas = []
@@ -193,11 +325,12 @@ def semanal():
                 'exibicao': f"{dt_obj.strftime('%d/%m')} - {dias_semana[dt_obj.weekday()]}",
                 'dia_num': dt_obj.weekday()
             })
-        except: continue
+        except:
+            continue
 
     equipes_finais = sorted(list(set(p.get('equipe') for p in projetos_filtrados if p.get('equipe') != "-")))
 
-    return render_template('mapa.html', base_ativa="Semanal", projetos=projetos_filtrados, 
+    return render_template('mapa.html', base_ativa="Semanal", projetos=projetos_filtrados,
                            equipes=equipes_finais, datas_colunas=datas_colunas,
                            mes_sel=mes_sel, semana_sel=semana_sel)
 
@@ -211,4 +344,4 @@ def limpar_dados():
 if __name__ == '__main__':
     # Configuração crucial para o Render: lê a porta da variável de ambiente
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=True)
