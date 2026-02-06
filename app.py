@@ -1,31 +1,121 @@
 import os
 import unicodedata
-import pandas as pd
-from flask import Flask, render_template, request, redirect, url_for, flash
-from datetime import datetime, timedelta
+import warnings
+from datetime import datetime
+from typing import List
+
+from flask import Flask, flash, redirect, render_template, request, url_for
+
+from services.cache import (
+    deduplicate_records,
+    load_cache,
+    load_history,
+    save_cache,
+    save_history,
+    update_memory_and_persist,
+)
+from services.dropbox_client import DropboxSettings, TokenCache, iter_excel_files
+from services.equipes import filtrar_registros_por_equipes, normalizar_codigo_equipe
+from services.excel_loader import carregar_registros_do_arquivo
+from utils.dates import filtrar_por_mes_e_semana, gerar_intervalo_datas
+
+warnings.filterwarnings(
+    'ignore',
+    message='Data Validation extension is not supported and will be removed',
+    category=UserWarning,
+    module='openpyxl'
+)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'supersecretkey-mapa-2024')
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-db_projetos = []
+CACHE_FILE_PATH = os.path.join(app.config['UPLOAD_FOLDER'], 'programacao_cache.json')
+HISTORY_FILE_PATH = os.path.join(app.config['UPLOAD_FOLDER'], 'programacao_historico.json')
 
-def normalizar_texto(texto):
-    if not texto: return ""
-    return "".join(c for c in unicodedata.normalize('NFD', str(texto))
-                  if unicodedata.category(c) != 'Mn').upper().strip()
+ALLOWED_EQUIPES: List[str] = [
+    'MA-BCB-O001M', 'MA-BCB-O002M', 'MA-BCB-O003M', 'MA-BCB-O004M',
+    'MA-BCB-O005M', 'MA-BCB-O006M', 'MA-BCB-T001M', 'MA-ITM-O001M',
+    'MA-ITM-O002M', 'MA-ITM-O003M', 'MA-ITM-O004M', 'MA-STI-T001M',
+    'MA-STI-O001M', 'MA-STI-O002M', 'MA-STI-O003M', 'MA-STI-O004M'
+]
+
+DROPBOX_SETTINGS = DropboxSettings(
+    folder_path=os.environ.get('DROPBOX_FOLDER_PATH', '/Programação Semanal Equipes/Programação Semanal 2026'),
+    files={
+        'BCB': 'PROGRAMAÇÃO SEMANAL BCB.xlsm',
+        'ITM': 'PROGRAMAÇÃO SEMANAL ITM.xlsm',
+        'STI': 'PROGRAMAÇÃO SEMANAL STI.xlsm'
+    },
+    access_token=os.environ.get('DROPBOX_ACCESS_TOKEN'),
+    refresh_token=os.environ.get('DROPBOX_REFRESH_TOKEN'),
+    app_key=os.environ.get('DROPBOX_APP_KEY'),
+    app_secret=os.environ.get('DROPBOX_APP_SECRET')
+)
+DROPBOX_TOKEN_CACHE = TokenCache()
+
+db_projetos: List[dict] = []
+
+cache_inicial = load_cache(CACHE_FILE_PATH)
+historico_inicial = load_history(HISTORY_FILE_PATH)
+if cache_inicial or historico_inicial:
+    registros_iniciais = filtrar_registros_por_equipes(historico_inicial + cache_inicial, ALLOWED_EQUIPES)
+    db_projetos = deduplicate_records(registros_iniciais)
+
+
+def normalizar_texto(texto: str | None) -> str:
+    if not texto:
+        return ''
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', str(texto))
+        if unicodedata.category(c) != 'Mn'
+    ).upper().strip()
+
+
+def sincronizar_programacao_dropbox():
+    global db_projetos
+    registros_total = []
+    erros = []
+
+    for chave, conteudo in iter_excel_files(DROPBOX_SETTINGS, DROPBOX_TOKEN_CACHE):
+        try:
+            conteudo.seek(0)
+            registros_total.extend(carregar_registros_do_arquivo(conteudo))
+        except Exception as exc:
+            erros.append(f"{chave}: {exc}")
+
+    registros_filtrados = filtrar_registros_por_equipes(registros_total, ALLOWED_EQUIPES)
+    if registros_filtrados:
+        db_projetos = update_memory_and_persist(registros_filtrados, CACHE_FILE_PATH, HISTORY_FILE_PATH)
+        mensagem = f"Atualização concluída! {len(db_projetos)} registros sincronizados."
+        sucesso = True
+    else:
+        mensagem = 'Nenhum registro das equipes selecionadas foi sincronizado.'
+        sucesso = False
+
+    if erros:
+        print('[AVISO] Ocorreram erros ao sincronizar com o Dropbox:', erros)
+        mensagem += ' ' + '; '.join(erros)
+
+    return {
+        'sucesso': sucesso,
+        'mensagem': mensagem,
+        'erros': erros,
+        'registros': db_projetos
+    }
+
 
 @app.route('/')
 def inicio():
     return render_template('inicio.html')
+
 
 @app.route('/programacao_geral')
 def programacao_geral():
     exibicao = db_projetos if db_projetos else []
     return render_template('programacao_geral.html', projetos=exibicao)
 
-# ...demais rotas e funções conforme seu código original...
 
 @app.route('/importar_excel', methods=['POST'])
 def importar_excel():
@@ -33,315 +123,127 @@ def importar_excel():
     if 'file' not in request.files:
         flash('Nenhum arquivo enviado')
         return redirect(url_for('programacao_geral'))
-    
+
     file = request.files['file']
     if file.filename == '' or not file.filename.endswith(('.xlsx', '.xls')):
         flash('Selecione um arquivo Excel válido (.xlsx)')
         return redirect(url_for('programacao_geral'))
 
     try:
-        print("[DEBUG] Iniciando leitura do arquivo Excel...")
-        df = pd.read_excel(file, header=3)
-        print("[DEBUG] DataFrame lido:", df.head())
-        df = df.dropna(axis=1, how='all')
-        print("[DEBUG] DataFrame após dropna:", df.head())
-        df.columns = [str(c).strip().upper() for c in df.columns]
-        print("[DEBUG] Colunas normalizadas:", df.columns)
-
-        mapeamento = {
-            'ID': 'id', 'DATA': 'data', 'PERÍODO': 'periodo', 'TIPO': 'tipo',
-            'EQUIPE': 'equipe', 'ENCARREGADO': 'encarregado', 'SUPERVISOR': 'supervisor',
-            'COM LV': 'com_lv', 'SI/NR': 'si_nr', 'PEP': 'pep', 'NOTA': 'nota',
-            'LOCAL': 'local', 'STATUS': 'status', 'CONDIÇÃO': 'condicao', 'OBSERVAÇÃO': 'obs'
-        }
-        print("[DEBUG] Mapeamento:", mapeamento)
-        
-        # Renomeia apenas as colunas presentes
-        df = df.rename(columns={k: v for k, v in mapeamento.items() if k in df.columns})
-        print("[DEBUG] DataFrame após renomear colunas:", df.head())
-        
-        # Filtra linhas sem ID para evitar lixo
-        if 'id' in df.columns:
-            df = df.dropna(subset=['id'])
-            print("[DEBUG] DataFrame após dropna id:", df.head())
-        else:
-            print("[ERRO] Coluna 'id' não encontrada após renomear. Colunas atuais:", df.columns)
-            flash("Coluna 'ID' não encontrada no arquivo Excel.")
-            return redirect(url_for('programacao_geral'))
-
-        if 'data' in df.columns:
-            df['data'] = pd.to_datetime(df['data'], errors='coerce').dt.strftime('%d/%m/%Y')
-            print("[DEBUG] DataFrame após conversão de data:", df[['data']].head())
-        else:
-            print("[ERRO] Coluna 'data' não encontrada após renomear. Colunas atuais:", df.columns)
-            flash("Coluna 'DATA' não encontrada no arquivo Excel.")
-            return redirect(url_for('programacao_geral'))
-
-        df = df.fillna("-")
-        print("[DEBUG] DataFrame após fillna:", df.head())
-        
-        colunas_validas = [c for c in mapeamento.values() if c in df.columns]
-        print("[DEBUG] Colunas válidas:", colunas_validas)
-        if df.empty or len(df[colunas_validas]) == 0:
-            print("[ERRO] Nenhum registro válido encontrado após processamento.")
-            flash("Nenhum registro válido encontrado no arquivo Excel.")
-            db_projetos = []
-        else:
-            db_projetos = df[colunas_validas].to_dict(orient='records')
-            print(f"[DEBUG] db_projetos gerado com {len(db_projetos)} registros.")
-            flash(f'Sucesso! {len(db_projetos)} registros importados.')
-    except Exception as e:
+        file.stream.seek(0)
+        registros = carregar_registros_do_arquivo(file)
+        registros_filtrados = filtrar_registros_por_equipes(registros, ALLOWED_EQUIPES)
+        if not registros_filtrados:
+            raise ValueError('Nenhuma das equipes permitidas foi encontrada no arquivo Excel enviado.')
+        db_projetos = update_memory_and_persist(registros_filtrados, CACHE_FILE_PATH, HISTORY_FILE_PATH)
+        flash(f'Sucesso! {len(db_projetos)} registros importados das equipes selecionadas.')
+    except ValueError as ve:
+        flash(str(ve))
+        db_projetos = []
+    except Exception as exc:
         import traceback
-        print("[ERRO] Falha ao importar Excel:", e)
+        print('[ERRO] Falha ao importar Excel:', exc)
         traceback.print_exc()
-        flash(f'Erro ao processar: {e}')
+        flash(f'Erro ao processar: {exc}')
     return redirect(url_for('programacao_geral'))
+
+
+@app.route('/atualizar_programacao', methods=['POST'])
+def atualizar_programacao():
+    resultado = sincronizar_programacao_dropbox()
+    flash(resultado['mensagem'])
+    return redirect(url_for('programacao_geral'))
+
+
+def _equipes_ordenadas(projetos: List[dict]) -> List[str]:
+    presentes = {p.get('equipe') for p in projetos if p.get('equipe') not in ('-', None)}
+    ordenadas = [eq for eq in ALLOWED_EQUIPES if eq in presentes]
+    extras = sorted(presentes - set(ALLOWED_EQUIPES))
+    ordenadas.extend(extras)
+    return ordenadas
+
+
+def _datas_colunas(datas_exibicao: List[str]):
+    dias_semana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
+    resposta = []
+    for data_str in datas_exibicao:
+        try:
+            dt = datetime.strptime(data_str, '%d/%m/%Y')
+            resposta.append({
+                'original': data_str,
+                'exibicao': f"{dt.strftime('%d/%m')} - {dias_semana[dt.weekday()]}",
+                'dia_num': dt.weekday()
+            })
+        except Exception:
+            continue
+    return resposta
+
 
 @app.route('/mapa')
 def mapa():
-    global db_projetos
     base_selecionada = request.args.get('base', '')
     mes_sel = request.args.get('mes', '')
     semana_sel = request.args.get('semana', '')
     base_norm = normalizar_texto(base_selecionada)
 
-    prefixos = {"BACABAL": "BCB", "ITAPECURU": "ITM", "SANTA INES": "STI"}
-    prefixo_alvo = ""
+    prefixos = {'BACABAL': 'BCB', 'ITAPECURU': 'ITM', 'SANTA INES': 'STI'}
+    prefixo_alvo = ''
     for nome, pref in prefixos.items():
         if nome in base_norm:
             prefixo_alvo = pref
 
-    projetos_validos = []
-    for p in db_projetos:
-        equipe = str(p.get('equipe', '')).upper()
+    projetos_base = []
+    for projeto in db_projetos:
+        equipe = normalizar_codigo_equipe(projeto.get('equipe'))
         if not base_norm or (prefixo_alvo and prefixo_alvo in equipe):
-            p['data'] = str(p.get('data', '')).strip()
-            projetos_validos.append(p)
-    
-    # Lógica de semanas personalizada para fevereiro, março e abril de 2026
-    def semana_custom(dt):
-        y = dt.year
-        m = dt.month
-        d = dt.day
-        # Semana 1 de fevereiro começa em 26/jan até 31/jan
-        if y == 2026:
-            if m == 1 and d >= 26:
-                return 1  # 26 a 31 de janeiro
-            if m == 2:
-                if 1 <= d <= 1:
-                    return 1  # 1 de fevereiro ainda é semana 1
-                if 2 <= d <= 7:
-                    return 2
-                if 8 <= d <= 14:
-                    return 3
-                if 15 <= d <= 21:
-                    return 4
-                if 22 <= d <= 28:
-                    return 5
-                if d >= 29:
-                    return 6
-            if m == 3:
-                if 1 <= d <= 7:
-                    return 1
-                if 8 <= d <= 14:
-                    return 2
-                if 15 <= d <= 21:
-                    return 3
-                if 22 <= d <= 28:
-                    return 4
-                if d >= 29:
-                    return 5
-            if m == 4:
-                if 1 <= d <= 4:
-                    return 1
-                if 5 <= d <= 11:
-                    return 2
-                if 12 <= d <= 18:
-                    return 3
-                if 19 <= d <= 25:
-                    return 4
-                if d >= 26:
-                    return 5
-        # Para outros meses, semana padrão
-        return ((d - 1) // 7) + 1
+            projeto['equipe'] = equipe
+            projeto['data'] = str(projeto.get('data', '')).strip()
+            projetos_base.append(projeto)
 
-    projetos_filtrados = []
-    for p in projetos_validos:
-        try:
-            data_projeto = datetime.strptime(p.get('data'), '%d/%m/%Y')
-        except:
-            continue
-        # Ajuste especial: semana 1 de fevereiro deve incluir 26-31 de janeiro
-        if mes_sel == '02' and semana_sel == '1':
-            if (data_projeto.month == 2 and semana_custom(data_projeto) == 1) or (data_projeto.month == 1 and data_projeto.day >= 26):
-                projetos_filtrados.append(p)
-            continue
-        # Filtro padrão
-        if mes_sel:
-            if str(data_projeto.month).zfill(2) != mes_sel:
-                continue
-        if semana_sel:
-            semana_proj = semana_custom(data_projeto)
-            if semana_proj is None or str(semana_proj) != semana_sel:
-                continue
-        projetos_filtrados.append(p)
+    projetos_filtrados = filtrar_por_mes_e_semana(projetos_base, mes_sel, semana_sel)
+    datas_exibicao = gerar_intervalo_datas(projetos_filtrados, base_norm)
+    equipes_finais = _equipes_ordenadas([p for p in projetos_filtrados if p.get('data') in datas_exibicao])
 
-    projetos_validos = projetos_filtrados
+    return render_template(
+        'mapa.html',
+        projetos=projetos_filtrados,
+        equipes=equipes_finais,
+        datas_colunas=_datas_colunas(datas_exibicao),
+        base_ativa=base_selecionada,
+        mes_sel=mes_sel,
+        semana_sel=semana_sel
+    )
 
-    datas_em_dados = [p.get('data') for p in projetos_validos if p.get('data') != "-"]
-    
-    if datas_em_dados:
-        try:
-            dt_objetos = [datetime.strptime(d, '%d/%m/%Y') for d in datas_em_dados]
-            data_inicio = min(dt_objetos)
-            data_fim = data_inicio + timedelta(days=2) if base_norm else max(dt_objetos)
-            
-            intervalo = pd.date_range(start=data_inicio, end=data_fim)
-            datas_exibicao = [d.strftime('%d/%m/%Y') for d in intervalo]
-        except: datas_exibicao = []
-    else:
-        datas_exibicao = []
-
-    dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-    datas_colunas = []
-    for d_str in datas_exibicao:
-        try:
-            dt_obj = datetime.strptime(d_str, '%d/%m/%Y')
-            datas_colunas.append({
-                'original': d_str,
-                'exibicao': f"{dt_obj.strftime('%d/%m')} - {dias_semana[dt_obj.weekday()]}",
-                'dia_num': dt_obj.weekday() 
-            })
-        except: continue
-
-    ordem_prioritaria = [
-        "MA-BCB-O001M", "MA-BCB-O002M", "MA-BCB-O003M", "MA-BCB-O004M",
-        "MA-BCB-O005M", "MA-BCB-O006M", "MA-BCB-O007M", "MA-BCB-T001M",
-        "MA-ITM-O001M", "MA-ITM-O002M", "MA-ITM-O003M", "MA-ITM-O004M",
-        "MA-STI-O001M", "MA-STI-O002M", "MA-STI-O003M", "MA-STI-O004M", "MA-STI-T001M"
-    ]
-    
-    equipes_nos_dados = set(p.get('equipe') for p in projetos_validos if p.get('data') in datas_exibicao)
-    equipes_finais = [e for e in ordem_prioritaria if e in equipes_nos_dados]
-    outras = sorted(list(equipes_nos_dados - set(ordem_prioritaria)))
-    equipes_finais.extend(outras)
-
-    return render_template('mapa.html', projetos=projetos_validos, equipes=equipes_finais, 
-                           datas_colunas=datas_colunas, base_ativa=base_selecionada, 
-                           mes_sel=mes_sel, semana_sel=semana_sel)
 
 @app.route('/semanal')
-def semanal(): 
+def semanal():
     mes_sel = request.args.get('mes', '')
     semana_sel = request.args.get('semana', '')
-    
-    # Lógica de semanas personalizada para fevereiro, março e abril de 2026
-    def semana_custom(dt):
-        y = dt.year
-        m = dt.month
-        d = dt.day
-        # Semana 1 de fevereiro começa em 26/jan até 31/jan
-        if y == 2026:
-            if m == 1 and d >= 26:
-                return 1  # 26 a 31 de janeiro
-            if m == 2:
-                if 1 <= d <= 1:
-                    return 1  # 1 de fevereiro ainda é semana 1
-                if 2 <= d <= 7:
-                    return 2
-                if 8 <= d <= 14:
-                    return 3
-                if 15 <= d <= 21:
-                    return 4
-                if 22 <= d <= 28:
-                    return 5
-                if d >= 29:
-                    return 6
-            if m == 3:
-                if 1 <= d <= 7:
-                    return 1
-                if 8 <= d <= 14:
-                    return 2
-                if 15 <= d <= 21:
-                    return 3
-                if 22 <= d <= 28:
-                    return 4
-                if d >= 29:
-                    return 5
-            if m == 4:
-                if 1 <= d <= 4:
-                    return 1
-                if 5 <= d <= 11:
-                    return 2
-                if 12 <= d <= 18:
-                    return 3
-                if 19 <= d <= 25:
-                    return 4
-                if d >= 26:
-                    return 5
-        # Para outros meses, semana padrão
-        return ((d - 1) // 7) + 1
+    projetos_filtrados = filtrar_por_mes_e_semana(db_projetos, mes_sel, semana_sel)
+    datas_exibicao = gerar_intervalo_datas(projetos_filtrados)
+    equipes_finais = _equipes_ordenadas(projetos_filtrados)
 
+    return render_template(
+        'mapa.html',
+        base_ativa='Semanal',
+        projetos=projetos_filtrados,
+        equipes=equipes_finais,
+        datas_colunas=_datas_colunas(datas_exibicao),
+        mes_sel=mes_sel,
+        semana_sel=semana_sel
+    )
 
-    projetos_filtrados = []
-    for p in db_projetos:
-        try:
-            data_projeto = datetime.strptime(p.get('data'), '%d/%m/%Y')
-        except:
-            continue
-        # Ajuste especial: semana 1 de fevereiro deve incluir 26-31 de janeiro
-        if mes_sel == '02' and semana_sel == '1':
-            if (data_projeto.month == 2 and semana_custom(data_projeto) == 1) or (data_projeto.month == 1 and data_projeto.day >= 26):
-                projetos_filtrados.append(p)
-            continue
-        # Filtro padrão
-        if mes_sel:
-            if str(data_projeto.month).zfill(2) != mes_sel:
-                continue
-        if semana_sel:
-            semana_proj = semana_custom(data_projeto)
-            if semana_proj is None or str(semana_proj) != semana_sel:
-                continue
-        projetos_filtrados.append(p)
-
-    datas_em_dados = [p.get('data') for p in projetos_filtrados if p.get('data') != "-"]
-    if datas_em_dados:
-        try:
-            dt_objetos = [datetime.strptime(d, '%d/%m/%Y') for d in datas_em_dados]
-            intervalo = pd.date_range(start=min(dt_objetos), end=max(dt_objetos))
-            datas_lista = [d.strftime('%d/%m/%Y') for d in intervalo]
-        except:
-            datas_lista = []
-    else:
-        datas_lista = []
-
-    dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-    datas_colunas = []
-    for d_str in datas_lista:
-        try:
-            dt_obj = datetime.strptime(d_str, '%d/%m/%Y')
-            datas_colunas.append({
-                'original': d_str,
-                'exibicao': f"{dt_obj.strftime('%d/%m')} - {dias_semana[dt_obj.weekday()]}",
-                'dia_num': dt_obj.weekday()
-            })
-        except:
-            continue
-
-    equipes_finais = sorted(list(set(p.get('equipe') for p in projetos_filtrados if p.get('equipe') != "-")))
-
-    return render_template('mapa.html', base_ativa="Semanal", projetos=projetos_filtrados,
-                           equipes=equipes_finais, datas_colunas=datas_colunas,
-                           mes_sel=mes_sel, semana_sel=semana_sel)
 
 @app.route('/limpar_dados')
 def limpar_dados():
     global db_projetos
-    db_projetos = []  
+    db_projetos = []
+    save_cache(CACHE_FILE_PATH, [])
+    save_history(HISTORY_FILE_PATH, [])
     flash('A tabela foi limpa com sucesso!')
     return redirect(url_for('programacao_geral'))
 
+
 if __name__ == '__main__':
-    # Configuração crucial para o Render: lê a porta da variável de ambiente
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)

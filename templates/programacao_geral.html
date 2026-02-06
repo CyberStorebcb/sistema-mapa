@@ -19,12 +19,11 @@
         </div>
 
         <div class="d-flex gap-3 align-items-center">
-            <form id="importForm" action="{{ url_for('importar_excel') }}" method="POST" enctype="multipart/form-data" class="d-none">
-                <input type="file" name="file" id="fileInput" accept=".xlsx, .xls">
+            <form action="{{ url_for('atualizar_programacao') }}" method="POST">
+                <button type="submit" class="btn-action btn-sync shadow-sm">
+                    <i class="fas fa-cloud-download-alt"></i> ATUALIZAR DROPBOX
+                </button>
             </form>
-            <button type="button" class="btn-action btn-import shadow-sm" onclick="$('#fileInput').trigger('click');">
-                <i class="fas fa-file-excel"></i> IMPORTAR EXCEL
-            </button>
             <button type="button" class="btn-action btn-clear shadow-sm" onclick="confirmClearData()">
                 <i class="fas fa-eraser"></i> LIMPAR BANCO
             </button>
@@ -202,7 +201,7 @@
     .custom-scrollbar::-webkit-scrollbar-thumb { background: #30363d; border-radius: 10px; border: 2px solid var(--bg-main); }
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--accent); }
     .btn-action { border: none; padding: 8px 16px; border-radius: 6px; font-weight: 700; font-size: 0.75rem; transition: 0.2s; }
-    .btn-import { background: var(--accent); color: #fff; }
+    .btn-sync { background: var(--accent); color: #fff; }
     .btn-clear { background: #da3633; color: #fff; }
 </style>
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
@@ -249,9 +248,9 @@
                     // Ordem personalizada
                     var ordem = [
                         'MA-BCB-O001M', 'MA-BCB-O002M', 'MA-BCB-O003M', 'MA-BCB-O004M',
-                        'MA-BCB-O005M', 'MA-BCB-O006M', 'MA-BCB-T001M',
-                        'ITM301', 'ITM302', 'ITM303', 'ITM304',
-                        'STI301', 'STI302', 'STI303', 'STI304', 'STI400'
+                        'MA-BCB-O005M', 'MA-BCB-O006M', 'MA-BCB-T001M', 'MA-ITM-O001M',
+                        'MA-ITM-O002M', 'MA-ITM-O003M', 'MA-ITM-O004M', 'MA-STI-T001M',
+                        'MA-STI-O001M', 'MA-STI-O002M', 'MA-STI-O003M', 'MA-STI-O004M'
                     ];
                     var equipes = column.data().unique().toArray();
                     var equipesOrdenadas = [];
@@ -273,9 +272,6 @@
         });
         $('#minDate, #maxDate').on('change', function() {
             table.draw();
-        });
-        $('#fileInput').on('change', function() {
-            if (this.files.length > 0) $('#importForm').submit();
         });
     });
     function confirmClearData() {
