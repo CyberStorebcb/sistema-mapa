@@ -1,0 +1,554 @@
+{% extends 'base.html' %}
+{% block title %}Equipes no Mapa{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<div class="glass-card mb-4">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0 text-uppercase">Mapa Dinâmico das Equipes</h4>
+      <small class="text-white-50">{{ semana_label }} • {{ mes_label }}</small>
+      <div class="text-success small fw-semibold mt-1">Somente obras com status PROGRAMADA</div>
+    </div>
+    <div class="d-flex gap-3 flex-wrap align-items-end justify-content-end map-actions">
+      <div class="map-filter">
+        <label for="baseFilter" class="form-label text-white-50 mb-1 small">Filtrar por base</label>
+        <select class="form-select form-select-sm map-select" id="baseFilter" data-no-loader="true">
+          <option value="">Todas as bases</option>
+          {% for base in bases %}
+          <option value="{{ base }}">{{ base }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="map-filter map-filter--team">
+        <label for="teamFilter" class="form-label text-white-50 mb-1 small">Filtrar por equipe</label>
+        <select class="form-select form-select-sm map-select" id="teamFilter" data-no-loader="true">
+          <option value="">Todas as equipes</option>
+          {% for equipe in equipes %}
+          <option value="{{ equipe }}">{{ equipe }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="map-filter">
+        <label for="dateFilter" class="form-label text-white-50 mb-1 small">Filtrar por data</label>
+        <select class="form-select form-select-sm map-select" id="dateFilter" data-no-loader="true">
+          <option value="">Todos os dias</option>
+        </select>
+      </div>
+      <button class="btn btn-outline-light btn-sm" id="fitBoundsBtn" data-no-loader="true">
+        <i class="fas fa-arrows-to-circle me-1"></i>
+        Ajustar visão
+      </button>
+      <a class="btn btn-light btn-sm" href="{{ url_for('localizacao_atual') }}">
+        <i class="fas fa-list me-1"></i>
+        Voltar para lista
+      </a>
+    </div>
+  </div>
+</div>
+<div class="row g-4 align-items-stretch">
+  <div class="col-12 col-lg-8">
+    <div class="glass-card h-100 p-0">
+      <div id="mapCanvas" class="map-canvas"></div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-4">
+    <div class="glass-card h-100" id="insightsPanel">
+      <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-1">
+        <div>
+          <p class="text-white-50 mb-1">Localizações encontradas</p>
+          <h2 class="mb-0" id="locationsCount">0</h2>
+        </div>
+        <div>
+          <p class="text-white-50 mb-1">Equipes envolvidas</p>
+          <h2 class="mb-0" id="teamsCount">0</h2>
+        </div>
+      </div>
+      <p class="small text-white-50 mb-3">
+        Os marcadores são plotados dinamicamente usando coordenadas obtidas via OpenStreetMap / Nominatim.
+        Resultados com cache local evitam chamadas repetidas.
+      </p>
+      <ul class="list-unstyled location-list" id="locationsList"></ul>
+    </div>
+  </div>
+</div>
+<div class="glass-card mt-4" id="logCard">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="mb-0"><i class="fas fa-wave-square me-2"></i>Atividade de geocodificação</h5>
+    <button class="btn btn-sm btn-outline-light" id="clearCacheBtn" data-no-loader="true">
+      <i class="fas fa-trash-can me-1"></i>Limpar cache local
+    </button>
+  </div>
+  <div id="geocodeLog" class="log-panel small text-white-50"></div>
+</div>
+<style>
+  .map-canvas {
+    height: 520px;
+    min-height: 420px;
+    border-radius: 20px;
+    overflow: hidden;
+  }
+  .map-actions {
+    row-gap: 12px;
+  }
+  .map-filter {
+    min-width: 180px;
+    flex: 1 1 180px;
+  }
+  .map-filter--team {
+    min-width: 220px;
+  }
+  .map-filter label {
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+  }
+  .map-select {
+    background-color: rgba(255,255,255,0.08);
+    color: #fff;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.4);
+    backdrop-filter: blur(6px);
+  }
+  .map-select:focus {
+    color: #fff;
+    border-color: #5ad8ff;
+    box-shadow: 0 0 0 0.15rem rgba(90, 216, 255, 0.3);
+  }
+  .map-select option {
+    color: #111;
+  }
+  @media (max-width: 991px) {
+    .map-canvas { height: 380px; }
+  }
+  #insightsPanel {
+    max-height: 520px;
+    overflow-y: auto;
+  }
+  .location-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .location-item {
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 12px 14px;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+    cursor: pointer;
+  }
+  .location-item:hover {
+    border-color: var(--loader-accent);
+    transform: translateY(-2px);
+  }
+  .location-item.is-ready {
+    border-color: #5ad8ff;
+    box-shadow: 0 0 12px rgba(90, 216, 255, 0.25);
+  }
+  .location-meta {
+    font-size: 0.85rem;
+    color: rgba(255,255,255,0.6);
+  }
+  .badge-stack {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .log-panel {
+    min-height: 120px;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px dashed rgba(255,255,255,0.2);
+    border-radius: 14px;
+    padding: 12px;
+  }
+  .log-entry {
+    margin-bottom: 6px;
+  }
+  .log-entry:last-child { margin-bottom: 0; }
+  .log-entry.success { color: #5fe2a0; }
+  .log-entry.warn { color: #ffc76b; }
+  .log-entry.error { color: #ff7b7b; }
+</style>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script id="mapConfig" type="application/json">
+  {
+    "apiUrl": "{{ url_for('api_localizacoes_atual') }}"
+  }
+</script>
+<script>
+  (function() {
+    const config = JSON.parse(document.getElementById('mapConfig').textContent);
+    const API_URL = config.apiUrl;
+    const NOMINATIM_DELAY = 1100;
+    const DEFAULT_CENTER = [-4.9609, -45.2744];
+    const cacheKey = 'cgb-localizacao-cache-v1';
+
+    const listEl = document.getElementById('locationsList');
+    const logEl = document.getElementById('geocodeLog');
+    const countEl = document.getElementById('locationsCount');
+    const teamsEl = document.getElementById('teamsCount');
+    const fitBtn = document.getElementById('fitBoundsBtn');
+    const clearCacheBtn = document.getElementById('clearCacheBtn');
+    const dateFilter = document.getElementById('dateFilter');
+    const baseFilter = document.getElementById('baseFilter');
+    const teamFilter = document.getElementById('teamFilter');
+
+    const filters = {
+      date: dateFilter ? dateFilter.value : '',
+      base: baseFilter ? baseFilter.value : '',
+      equipe: teamFilter ? teamFilter.value : ''
+    };
+
+    const map = L.map('mapCanvas', { zoomControl: false, worldCopyJump: true }).setView(DEFAULT_CENTER, 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    let bounds = L.latLngBounds();
+    const markerRegistry = new Map();
+    let lastGeocode = 0;
+    let geocodeCache = {};
+    let rawLocations = [];
+    let plotSequence = 0;
+    let dataReady = false;
+
+    try {
+      geocodeCache = JSON.parse(localStorage.getItem(cacheKey) || '{}');
+    } catch (err) {
+      geocodeCache = {};
+    }
+
+    function log(message, level = 'info') {
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${level}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function renderEmptyList() {
+      listEl.innerHTML = '';
+      const li = document.createElement('li');
+      li.className = 'text-white-50';
+      li.textContent = 'Nenhuma obra programada encontrada com os filtros atuais.';
+      listEl.appendChild(li);
+      countEl.textContent = '0';
+      teamsEl.textContent = '0';
+    }
+
+    function locationTemplate(location) {
+      const li = document.createElement('li');
+      li.className = 'location-item';
+      li.dataset.location = location.local;
+
+      const title = document.createElement('strong');
+      title.textContent = location.local;
+      li.appendChild(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'location-meta';
+      const dataUnica = new Set(location.projetos.map(p => p.data).filter(Boolean));
+      meta.textContent = `${location.projetos.length} atividades • ${dataUnica.size} dia(s)`;
+      li.appendChild(meta);
+
+      const badgeStack = document.createElement('div');
+      badgeStack.className = 'badge-stack';
+      location.projetos.forEach(proj => {
+        const badge = document.createElement('span');
+        badge.className = 'badge rounded-pill bg-light text-dark';
+        badge.textContent = `${proj.equipe} • ${proj.periodo || 'Sem período'}`;
+        badgeStack.appendChild(badge);
+      });
+      li.appendChild(badgeStack);
+
+      li.addEventListener('mouseenter', () => {
+        const marker = markerRegistry.get(location.local);
+        if (marker) { marker.openPopup(); }
+      });
+      li.addEventListener('click', () => {
+        const marker = markerRegistry.get(location.local);
+        if (marker) {
+          map.flyTo(marker.getLatLng(), 12, { duration: 0.6 });
+          marker.openPopup();
+        }
+      });
+
+      return li;
+    }
+
+    function renderLocations(locations) {
+      listEl.innerHTML = '';
+      if (!locations.length) {
+        renderEmptyList();
+        return;
+      }
+      const teams = new Set();
+      locations.forEach(location => {
+        location.projetos.forEach(p => teams.add(p.equipe));
+        listEl.appendChild(locationTemplate(location));
+      });
+      countEl.textContent = locations.length;
+      teamsEl.textContent = teams.size;
+    }
+
+    function normalizeDateValue(value) {
+      return (value || '').trim();
+    }
+
+    function dateToTimestamp(value) {
+      const normalized = normalizeDateValue(value);
+      const parts = normalized.split(/[\\/]/).map(Number);
+      if (parts.length === 3 && parts.every(Number.isFinite)) {
+        const [day, month, year] = parts;
+        return Date.UTC(year, month - 1, day);
+      }
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    function updateDateOptions(locations) {
+      if (!dateFilter) { return; }
+      const dates = new Set();
+      locations.forEach(location => {
+        location.projetos.forEach(proj => {
+          const normalized = normalizeDateValue(proj.data);
+          if (normalized) {
+            dates.add(normalized);
+          }
+        });
+      });
+      const sorted = Array.from(dates).sort((a, b) => dateToTimestamp(a) - dateToTimestamp(b));
+      dateFilter.innerHTML = '<option value="">Todos os dias</option>';
+      sorted.forEach(date => {
+        const option = document.createElement('option');
+        option.value = date;
+        option.textContent = date;
+        dateFilter.appendChild(option);
+      });
+    }
+
+    function inferBaseFromEquipe(equipe) {
+      const normalized = (equipe || '').toUpperCase();
+      if (normalized.includes('BCB')) { return 'BCB'; }
+      if (normalized.includes('ITM')) { return 'ITM'; }
+      if (normalized.includes('STI')) { return 'STI'; }
+      return '';
+    }
+
+    function normalizarEquipe(value) {
+      return (value || '').toUpperCase().replace(/\s+/g, '');
+    }
+
+    function getDatasetForFilters(currentFilters) {
+      if (!rawLocations.length) { return []; }
+      const normalizedDate = normalizeDateValue(currentFilters.date);
+      const baseTarget = (currentFilters.base || '').toUpperCase();
+      const equipeTarget = normalizarEquipe(currentFilters.equipe);
+
+      return rawLocations
+        .map(location => {
+          const matches = location.projetos.filter(proj => {
+            const projDate = normalizeDateValue(proj.data);
+            const projBase = (proj.base || inferBaseFromEquipe(proj.equipe)).toUpperCase();
+            const projEquipe = normalizarEquipe(proj.equipe);
+            const dateMatch = !normalizedDate || normalizedDate === projDate;
+            const baseMatch = !baseTarget || projBase === baseTarget;
+            const equipeMatch = !equipeTarget || projEquipe === equipeTarget;
+            return dateMatch && baseMatch && equipeMatch;
+          });
+          return matches.length ? { local: location.local, projetos: matches } : null;
+        })
+        .filter(Boolean);
+    }
+
+    function clearMarkers() {
+      markerRegistry.forEach(marker => map.removeLayer(marker));
+      markerRegistry.clear();
+      bounds = L.latLngBounds();
+    }
+
+    function buildPopup(location) {
+      const wrapper = document.createElement('div');
+      const heading = document.createElement('strong');
+      heading.textContent = location.local;
+      wrapper.appendChild(heading);
+
+      const list = document.createElement('ul');
+      list.style.paddingLeft = '18px';
+      list.style.margin = '8px 0 0';
+      location.projetos.forEach(proj => {
+        const item = document.createElement('li');
+        const equipe = document.createElement('strong');
+        equipe.textContent = proj.equipe;
+        item.appendChild(equipe);
+        const status = proj.status || 'Sem status';
+        const texto = document.createTextNode(` • ${status} • ${proj.data || 'Sem data'}`);
+        item.appendChild(texto);
+        list.appendChild(item);
+      });
+      wrapper.appendChild(list);
+      return wrapper;
+    }
+
+    function escapeSelector(value) {
+      if (window.CSS && CSS.escape) {
+        return CSS.escape(value);
+      }
+      return value.replace(/([#. ;?+*~':"!^$\[\]()=>|\/@])/g, '\\$1');
+    }
+
+    function markReady(local) {
+      const li = listEl.querySelector(`[data-location="${escapeSelector(local)}"]`);
+      if (li) { li.classList.add('is-ready'); }
+    }
+
+    async function applyFilters() {
+      if (!dataReady) { return; }
+      const sequenceId = ++plotSequence;
+      clearMarkers();
+      const dataset = getDatasetForFilters(filters);
+      if (!dataset.length) {
+        renderEmptyList();
+        if (rawLocations.length) {
+          log('Nenhuma obra programada encontrada com os filtros atuais', 'warn');
+        }
+        return;
+      }
+      renderLocations(dataset);
+      await plotMarkers(dataset, sequenceId);
+    }
+
+    async function throttleGeocode() {
+      const now = Date.now();
+      const elapsed = now - lastGeocode;
+      if (elapsed < NOMINATIM_DELAY) {
+        await new Promise(resolve => setTimeout(resolve, NOMINATIM_DELAY - elapsed));
+      }
+      lastGeocode = Date.now();
+    }
+
+    async function geocode(local) {
+      const cacheHit = geocodeCache[local];
+      if (cacheHit) {
+        log(`Cache hit para ${local}`, 'success');
+        return cacheHit;
+      }
+      await throttleGeocode();
+      log(`Consultando coordenadas para ${local}...`);
+      const query = encodeURIComponent(`${local} Maranhão Brasil`);
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${query}&addressdetails=0`);
+      if (!response.ok) {
+        throw new Error(`Falha ${response.status}`);
+      }
+      const data = await response.json();
+      if (!data.length) {
+        throw new Error('Nenhum resultado retornado');
+      }
+      const { lat, lon, display_name: label } = data[0];
+      const coords = { lat: parseFloat(lat), lon: parseFloat(lon), label };
+      geocodeCache[local] = coords;
+      localStorage.setItem(cacheKey, JSON.stringify(geocodeCache));
+      log(`Coordenadas encontradas para ${local}`, 'success');
+      return coords;
+    }
+
+    async function plotMarkers(locations, sequenceId) {
+      let plotted = 0;
+      for (const location of locations) {
+        if (sequenceId !== plotSequence) {
+          return;
+        }
+        try {
+          const coords = await geocode(location.local);
+          if (!coords || sequenceId !== plotSequence) { continue; }
+          const marker = L.marker([coords.lat, coords.lon], { title: location.local }).addTo(map);
+          marker.bindPopup(buildPopup(location));
+          markerRegistry.set(location.local, marker);
+          bounds.extend(marker.getLatLng());
+          markReady(location.local);
+          plotted += 1;
+        } catch (error) {
+          log(`Erro ao geocodificar ${location.local}: ${error.message}`, 'error');
+        }
+      }
+      if (sequenceId !== plotSequence) {
+        return;
+      }
+      if (plotted && bounds.isValid()) {
+        map.fitBounds(bounds.pad(0.18));
+      } else {
+        log('Nenhum marcador geocodificado; mantendo visão padrão', 'warn');
+      }
+    }
+
+    async function bootstrap() {
+      try {
+        log('Buscando dados da semana...');
+        const response = await fetch(API_URL);
+        if (!response.ok) {
+          throw new Error('API indisponível');
+        }
+        const payload = await response.json();
+        rawLocations = Array.isArray(payload) ? payload : [];
+        dataReady = true;
+        updateDateOptions(rawLocations);
+        if (!rawLocations.length) {
+          renderEmptyList();
+          log('Nenhum registro disponível para mapear', 'warn');
+          return;
+        }
+        filters.date = dateFilter ? dateFilter.value : '';
+        await applyFilters();
+      } catch (error) {
+        log(error.message, 'error');
+        renderEmptyList();
+      }
+    }
+
+    if (dateFilter) {
+      dateFilter.addEventListener('change', () => {
+        if (!dataReady) { return; }
+        filters.date = dateFilter.value;
+        log(filters.date ? `Filtrando por ${filters.date}` : 'Exibindo todos os dias');
+        applyFilters();
+      });
+    }
+
+    if (baseFilter) {
+      baseFilter.addEventListener('change', () => {
+        if (!dataReady) { return; }
+        filters.base = baseFilter.value;
+        log(filters.base ? `Base selecionada: ${filters.base}` : 'Todas as bases visíveis');
+        applyFilters();
+      });
+    }
+
+    if (teamFilter) {
+      teamFilter.addEventListener('change', () => {
+        if (!dataReady) { return; }
+        filters.equipe = teamFilter.value;
+        log(filters.equipe ? `Equipe filtrada: ${filters.equipe}` : 'Todas as equipes visíveis');
+        applyFilters();
+      });
+    }
+
+    fitBtn.addEventListener('click', () => {
+      if (bounds.isValid()) {
+        map.fitBounds(bounds.pad(0.18));
+        log('Visão ajustada para todos os marcadores', 'success');
+      } else {
+        log('Ainda não existem marcadores suficientes', 'warn');
+      }
+    });
+
+    clearCacheBtn.addEventListener('click', () => {
+      geocodeCache = {};
+      localStorage.removeItem(cacheKey);
+      log('Cache local limpo', 'warn');
+    });
+
+    bootstrap();
+  })();
+</script>
+{% endblock %}
