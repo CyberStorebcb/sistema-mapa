@@ -86,3 +86,8 @@ def gerar_intervalo_datas(projetos: Iterable[Projeto], base_norm: str = '') -> L
         intervalo.append(atual.strftime('%d/%m/%Y'))
         atual += timedelta(days=1)
     return intervalo
+
+
+def obter_mes_semana_atual() -> tuple[str, str]:
+    hoje = datetime.now()
+    return hoje.strftime('%m'), str(semana_customizada(hoje))
