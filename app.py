@@ -1,10 +1,11 @@
 import os
 import unicodedata
 import warnings
+from collections import defaultdict
 from datetime import datetime
 from typing import List
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
 from services.cache import (
     deduplicate_records,
@@ -17,7 +18,7 @@ from services.cache import (
 from services.dropbox_client import DropboxSettings, TokenCache, iter_excel_files
 from services.equipes import filtrar_registros_por_equipes, normalizar_codigo_equipe
 from services.excel_loader import carregar_registros_do_arquivo
-from utils.dates import filtrar_por_mes_e_semana, gerar_intervalo_datas
+from utils.dates import filtrar_por_mes_e_semana, gerar_intervalo_datas, obter_mes_semana_atual
 
 warnings.filterwarnings(
     'ignore',
@@ -39,6 +40,18 @@ ALLOWED_EQUIPES: List[str] = [
     'MA-BCB-O005M', 'MA-BCB-O006M', 'MA-BCB-T001M', 'MA-ITM-O001M',
     'MA-ITM-O002M', 'MA-ITM-O003M', 'MA-ITM-O004M', 'MA-STI-T001M',
     'MA-STI-O001M', 'MA-STI-O002M', 'MA-STI-O003M', 'MA-STI-O004M'
+]
+
+BASE_PREFIXES = {
+    'BCB': 'MA-BCB',
+    'ITM': 'MA-ITM',
+    'STI': 'MA-STI'
+}
+BASE_OPTIONS = list(BASE_PREFIXES.keys())
+
+MESES_PT = [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
 ]
 
 DROPBOX_SETTINGS = DropboxSettings(
@@ -71,6 +84,18 @@ def normalizar_texto(texto: str | None) -> str:
         c for c in unicodedata.normalize('NFD', str(texto))
         if unicodedata.category(c) != 'Mn'
     ).upper().strip()
+
+
+def identificar_base_por_equipe(equipe: str | None) -> str:
+    codigo = normalizar_codigo_equipe(equipe)
+    for base, prefixo in BASE_PREFIXES.items():
+        if prefixo in codigo:
+            return base
+    return ''
+
+
+def status_programado(status: str | None) -> bool:
+    return normalizar_texto(status).startswith('PROGRAMAD')
 
 
 def sincronizar_programacao_dropbox():
@@ -232,6 +257,98 @@ def semanal():
         mes_sel=mes_sel,
         semana_sel=semana_sel
     )
+
+
+def _projetos_semana_atual():
+    mes_sel, semana_sel = obter_mes_semana_atual()
+    projetos_semana = filtrar_por_mes_e_semana(db_projetos, mes_sel, semana_sel)
+    return projetos_semana, mes_sel, semana_sel
+
+
+@app.route('/localizacao_atual')
+def localizacao_atual():
+    projetos_semana, mes_sel, semana_sel = _projetos_semana_atual()
+    agrupados = defaultdict(list)
+    for projeto in projetos_semana:
+        equipe = normalizar_codigo_equipe(projeto.get('equipe'))
+        projeto['equipe'] = equipe
+        agrupados[equipe].append(projeto)
+
+    cards = []
+    for equipe in ALLOWED_EQUIPES:
+        if equipe not in agrupados:
+            continue
+        def _ordena(proj):
+            try:
+                return datetime.strptime(str(proj.get('data')), '%d/%m/%Y')
+            except Exception:
+                return datetime.max
+        registros = sorted(agrupados[equipe], key=_ordena)
+        cards.append({
+            'equipe': equipe,
+            'projetos': registros,
+            'local_principal': registros[-1].get('local', '-') if registros else '-'
+        })
+
+    return render_template(
+        'localizacao.html',
+        cards=cards,
+        semana_label=f"Semana {semana_sel}",
+        mes_label=MESES_PT[int(mes_sel) - 1] if mes_sel.isdigit() else mes_sel,
+        total=len(projetos_semana)
+    )
+
+
+@app.route('/localizacao_mapa')
+def localizacao_mapa():
+    _, mes_sel, semana_sel = _projetos_semana_atual()
+    return render_template(
+        'localizacao_mapa.html',
+        semana_label=f"Semana {semana_sel}",
+        mes_label=MESES_PT[int(mes_sel) - 1] if mes_sel.isdigit() else mes_sel,
+        bases=BASE_OPTIONS,
+        equipes=ALLOWED_EQUIPES
+    )
+
+
+@app.route('/api/localizacoes_atual')
+def api_localizacoes_atual():
+    projetos_semana, _, _ = _projetos_semana_atual()
+    base_filter = request.args.get('base', '').strip().upper()
+    if base_filter and base_filter not in BASE_PREFIXES:
+        base_filter = ''
+    equipe_param = request.args.get('equipe', '').strip()
+    equipe_filter = normalizar_codigo_equipe(equipe_param) if equipe_param else ''
+    agrupados = defaultdict(list)
+    for projeto in projetos_semana:
+        if not status_programado(projeto.get('status')):
+            continue
+        equipe = normalizar_codigo_equipe(projeto.get('equipe'))
+        if not equipe:
+            continue
+        if equipe_filter and equipe != equipe_filter:
+            continue
+        base_atual = identificar_base_por_equipe(equipe)
+        if base_filter and base_atual != base_filter:
+            continue
+        local = (projeto.get('local') or '-').strip()
+        if not local or local == '-':
+            continue
+        agrupados[local].append({
+            'equipe': equipe,
+            'data': projeto.get('data'),
+            'status': projeto.get('status'),
+            'periodo': projeto.get('periodo'),
+            'base': base_atual
+        })
+    payload = [
+        {
+            'local': local,
+            'projetos': registros
+        }
+        for local, registros in agrupados.items()
+    ]
+    return jsonify(payload)
 
 
 @app.route('/limpar_dados')
