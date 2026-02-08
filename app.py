@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import unicodedata
 import warnings
 from collections import defaultdict
@@ -27,6 +28,7 @@ warnings.filterwarnings(
     module='openpyxl'
 )
 
+load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'supersecretkey-mapa-2024')
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
