@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 import pandas as pd
+import unicodedata
 
 COLUMN_MAP = {
     'ID': 'id',
@@ -13,6 +14,8 @@ COLUMN_MAP = {
     'PERIODO': 'periodo',
     'TIPO': 'tipo',
     'EQUIPE': 'equipe',
+    'BASE': 'base',
+    'OBRA': 'obra',
     'ENCARREGADO': 'encarregado',
     'SUPERVISOR': 'supervisor',
     'COM LV': 'com_lv',
@@ -22,10 +25,24 @@ COLUMN_MAP = {
     'NOTA': 'nota',
     'LOCAL': 'local',
     'STATUS': 'status',
+    'STATUS2': 'status2',
+    'STATUS 2': 'status2',
+    'QTD PROG': 'qtd_prog',
+    'QTD PROG.': 'qtd_prog',
+    'INIC': 'inic',
+    'CONC': 'conc',
+    'INIC SEM': 'inic_sem',
+    'CONC SEM': 'conc_sem',
+    'PROG': 'prog',
+    'AND': 'andamento',
+    'VALOR': 'valor',
+    'VIZITA': 'vizita',
+    'VISITA': 'vizita',
     'CONDIÇÃO': 'condicao',
     'CONDICAO': 'condicao',
     'OBSERVAÇÃO': 'obs',
-    'OBSERVACAO': 'obs'
+    'OBSERVACAO': 'obs',
+    'OBS': 'obs'
 }
 
 COLUNAS_VALIDAS = tuple(COLUMN_MAP.values())
@@ -38,16 +55,17 @@ def _normalize_header(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [str(c).strip().upper() for c in df.columns]
     return df
 
-def ajustar_cabecalho_excel(df: pd.DataFrame) -> pd.DataFrame:
+def ajustar_cabecalho_excel(df: pd.DataFrame, required_cols: tuple[str, ...] | None = None) -> pd.DataFrame:
+    required = tuple(col.upper() for col in (required_cols or ('DATA', 'EQUIPE')))
     df_tmp = _normalize_header(df)
-    if 'DATA' in df_tmp.columns:
+    if all(col in df_tmp.columns for col in required):
         return df_tmp
 
     limite = min(30, len(df_tmp))
     for idx in range(limite):
         linha = df_tmp.iloc[idx]
         linha_norm = [str(v).strip().upper() if pd.notna(v) else '' for v in linha]
-        if 'DATA' in linha_norm and 'EQUIPE' in linha_norm:
+        if all(col in linha_norm for col in required):
             novo = df_tmp.iloc[idx + 1:].reset_index(drop=True)
             novo.columns = linha_norm
             return novo
@@ -56,7 +74,7 @@ def ajustar_cabecalho_excel(df: pd.DataFrame) -> pd.DataFrame:
             if aux_idx < len(df_tmp):
                 aux_linha = df_tmp.iloc[aux_idx]
                 aux_norm = [str(v).strip().upper() if pd.notna(v) else '' for v in aux_linha]
-                if 'DATA' in aux_norm and 'EQUIPE' in aux_norm:
+                if all(col in aux_norm for col in required):
                     novo = df_tmp.iloc[aux_idx + 1:].reset_index(drop=True)
                     novo.columns = aux_norm
                     return novo
@@ -75,6 +93,9 @@ def carregar_registros_do_dataframe(df: pd.DataFrame) -> List[Dict]:
     df = df.dropna(axis=1, how='all')
     df.columns = [str(c).strip().upper() for c in df.columns]
     df = df.rename(columns={k: v for k, v in COLUMN_MAP.items() if k in df.columns})
+    if 'status2' in df.columns:
+        df['status'] = df['status2']
+        df = df.drop(columns=['status2'])
     df = df.loc[:, ~df.columns.duplicated()]
 
     if 'data' not in df.columns:
@@ -110,3 +131,48 @@ def carregar_registros_do_arquivo(excel_buffer: BytesIO | str) -> List[Dict]:
     if not registros:
         raise ValueError('Colunas obrigatórias não foram encontradas em nenhuma aba do arquivo Excel.')
     return registros
+
+
+def carregar_concluidas_do_arquivo(excel_buffer: BytesIO | str) -> List[Dict]:
+    planilhas = pd.read_excel(excel_buffer, sheet_name=None, header=None)
+    alvo_df = None
+
+    def _normalize_nome(nome: str) -> str:
+        base = unicodedata.normalize('NFD', str(nome))
+        sem_acentos = ''.join(ch for ch in base if unicodedata.category(ch) != 'Mn')
+        return sem_acentos.upper().strip()
+
+    for nome, df in planilhas.items():
+        if df.empty:
+            continue
+        if _normalize_nome(nome) == 'CONCLUIDAS':
+            alvo_df = df
+            break
+
+    if alvo_df is None:
+        return []
+
+    df = ajustar_cabecalho_excel(alvo_df, required_cols=('BASE', 'OBRA'))
+    df = df.dropna(axis=1, how='all')
+    df.columns = [str(c).strip().upper() for c in df.columns]
+    rename_map = {k: v for k, v in COLUMN_MAP.items() if k in df.columns}
+    df = df.rename(columns=rename_map)
+    df = df.loc[:, ~df.columns.duplicated()]
+
+    obrigatorias = ['base', 'obra']
+    if not all(col in df.columns for col in obrigatorias):
+        return []
+
+    desejadas = ['base', 'obra', 'status', 'qtd_prog', 'inic', 'conc', 'inic_sem', 'conc_sem',
+                 'prog', 'andamento', 'valor', 'vizita']
+    for coluna in desejadas:
+        if coluna not in df.columns:
+            df[coluna] = '-' if coluna not in ('qtd_prog', 'prog') else 0
+
+    df = df.fillna('-')
+    df = df[df['base'].astype(str).str.strip().ne('-')]
+    df = df[df['obra'].astype(str).str.strip().ne('-')]
+
+    registros = df[desejadas].to_dict(orient='records')
+    return registros
+

@@ -11,8 +11,10 @@ import requests
 
 @dataclass
 class DropboxSettings:
-    folder_path: str
-    files: Dict[str, str]
+    controle_path: str
+    folder_path: str | None = None
+    files: Dict[str, str] = field(default_factory=dict)
+    condicao_path: str | None = None
     access_token: str | None = None
     refresh_token: str | None = None
     app_key: str | None = None
@@ -71,6 +73,8 @@ def download_file(path: str, token: str) -> BytesIO:
 
 def iter_excel_files(settings: DropboxSettings, cache: TokenCache) -> Iterator[Tuple[str, BytesIO]]:
     token = get_access_token(settings, cache)
+    if not settings.folder_path or not settings.files:
+        return
     for chave, nome in settings.files.items():
         caminho = f"{settings.folder_path.rstrip('/')}/{nome}"
         yield chave, download_file(caminho, token)

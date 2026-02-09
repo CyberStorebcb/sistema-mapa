@@ -3,10 +3,733 @@
 {% block title %}Concluídas{% endblock %}
 
 {% block content %}
-<div class="container py-4">
-    <div class="glass-card">
-        <h1 class="h3 mb-3 text-white"><i class="fas fa-check-circle me-2"></i>Obras Concluídas</h1>
-        <p class="text-white-50">Arquivo de obras finalizadas e entregues.</p>
+<div class="container py-4" id="concluidas-page">
+    <div class="glass-card mb-4">
+        <div class="d-flex flex-column flex-lg-row justify-content-between gap-4">
+            <div>
+                <h1 class="h4 mb-1 text-white"><i class="fas fa-check-circle me-2"></i>Obras concluídas</h1>
+                <p class="text-white-50 mb-1">Histórico consolidado · {{ obras|length }} registro(s)</p>
+                <small class="text-info d-block">Visão completa · Todos os meses carregados</small>
+                <small class="text-white-50">Última sincronização: {{ sync_timestamp or 'Nunca sincronizado' }}</small>
+            </div>
+            <div class="w-100">
+                <form class="filter-form" method="get" action="{{ url_for('concluidas') }}">
+                    <div class="filter-grid">
+                        <div>
+                            <label>Base</label>
+                            <select class="form-select" name="base">
+                                <option value="">Todas</option>
+                                {% for base in bases_opcoes %}
+                                <option value="{{ base }}" {% if filtros.base and filtros.base.upper() == base.upper() %}selected{% endif %}>{{ base }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label>Status</label>
+                            <select class="form-select" name="status">
+                                <option value="">Todos</option>
+                                {% for status in status_opcoes %}
+                                <option value="{{ status }}" {% if filtros.status and filtros.status.upper() == status.upper() %}selected{% endif %}>{{ status }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label>Semana inicial</label>
+                            <select class="form-select" name="semana_inicio">
+                                <option value="">Todas</option>
+                                {% for semana in semanas_opcoes %}
+                                <option value="{{ semana }}" {% if filtros.semana_inicio and filtros.semana_inicio|int == semana %}selected{% endif %}>Semana {{ semana }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label>Semana final</label>
+                            <select class="form-select" name="semana_fim">
+                                <option value="">Todas</option>
+                                {% for semana in semanas_opcoes %}
+                                <option value="{{ semana }}" {% if filtros.semana_fim and filtros.semana_fim|int == semana %}selected{% endif %}>Semana {{ semana }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label>De</label>
+                            <input type="date" class="form-control" name="inicio" value="{{ filtros.inicio }}">
+                        </div>
+                        <div>
+                            <label>Até</label>
+                            <input type="date" class="form-control" name="fim" value="{{ filtros.fim }}">
+                        </div>
+                    </div>
+                    <div class="filter-actions">
+                        <button class="btn btn-info" type="submit"><i class="fas fa-filter me-1"></i>Aplicar filtros</button>
+                        <a class="btn btn-outline-light" href="{{ url_for('concluidas') }}">Limpar</a>
+                        <a class="btn btn-success" href="{{ export_url }}" target="_blank" data-noLoader="true"><i class="fas fa-file-export me-1"></i>Exportar CSV</a>
+                        <a class="btn btn-warning text-dark" href="{{ export_pdf_url }}" target="_blank" data-noLoader="true"><i class="fas fa-file-pdf me-1"></i>Exportar PDF</a>
+                        <button class="btn btn-outline-info" type="button" id="share-view"><i class="fas fa-link me-1"></i>Copiar link</button>
+                    </div>
+                </form>
+            </div>
+        </div>
     </div>
+    {% if registros_sem_valor %}
+    <div class="glass-card mb-4 attention-card">
+        <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+            <h5 class="text-warning mb-0"><i class="fas fa-exclamation-triangle me-2"></i>Registros com dados pendentes</h5>
+            <div class="d-flex align-items-center gap-3">
+                <small class="text-white-50">{{ pendentes_total }} pendência(s) · Valor ou AND zerados/inexistentes</small>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-warning" type="button" id="toggle-pendentes">
+                        <i class="fas fa-chevron-down me-1"></i>Mostrar
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="table-responsive d-none" id="pendentes-container">
+            <table class="table table-dark table-hover align-middle small">
+                <thead>
+                    <tr>
+                        <th>Base</th>
+                        <th>Obra</th>
+                        <th>Pendência</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in registros_sem_valor %}
+                    <tr>
+                        <td>{{ item.base }}</td>
+                        <td class="text-info">{{ item.obra }}</td>
+                        <td>{{ item.motivo }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if metricas.total %}
+    <div class="metrics-grid mb-4">
+        <div class="metric-card">
+            <span>Total carregado</span>
+            <strong>{{ metricas.total }}</strong>
+            <small>Obras elegíveis</small>
+        </div>
+        <div class="metric-card">
+            <span>Duração média</span>
+            <strong>{{ metricas.media_dias }} dias</strong>
+            <small>Do início à conclusão</small>
+        </div>
+        <div class="metric-card">
+            <span>Maior duração</span>
+            <strong>{{ metricas.maior_duracao }} dias</strong>
+            <small>Registro extremo</small>
+        </div>
+        <div class="metric-card">
+            <span>Base destaque</span>
+            <strong>{{ metricas.base_top[0] }}</strong>
+            <small>{{ metricas.base_top[1] }} obra(s)</small>
+        </div>
+        <div class="metric-card accent">
+            <span>Valor em andamento</span>
+            <strong>{{ metricas.total_andamento|brl }}</strong>
+            <small>Coluna AND</small>
+        </div>
+        <div class="metric-card accent">
+            <span>Valor total</span>
+            <strong>{{ metricas.total_valor|brl }}</strong>
+            <small>Somatório faturado</small>
+        </div>
+    </div>
+    <div class="dual-section mb-4">
+        <div class="glass-card h-100">
+            <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+                <h5 class="text-white mb-0"><i class="fas fa-layer-group me-2 text-info"></i>Distribuição por base</h5>
+                <small class="text-white-50">Percentual sobre o total</small>
+            </div>
+            <div class="distribution-list">
+                {% for base in metricas.bases %}
+                <div class="distribution-row">
+                    <span class="label">{{ base.nome }}</span>
+                    <div class="progress flex-grow-1 mx-3">
+                        <div class="progress-bar bg-info" data-progress-width="{{ base.percentual|default(0)|int }}"></div>
+                    </div>
+                    <span class="value">{{ base.quantidade }} · {{ base.percentual|round(1) }}%</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="glass-card h-100">
+            <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+                <h5 class="text-white mb-0"><i class="fas fa-coins me-2 text-success"></i>Faturamento por base</h5>
+                <small class="text-white-50">Somatório do valor concluído</small>
+            </div>
+            <div class="distribution-list">
+                {% if metricas.bases_valor %}
+                    {% for base in metricas.bases_valor %}
+                    <div class="distribution-row value-row">
+                        <span class="label">{{ base.nome }}</span>
+                        <div class="progress flex-grow-1 mx-3">
+                            <div class="progress-bar bg-success" data-progress-width="{{ base.percentual|default(0) }}"></div>
+                        </div>
+                        <span class="value value-highlight">{{ base.valor|brl }}<small>{{ base.percentual|round(1) }}%</small></span>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <p class="text-white-50 small mb-0">Sem valores informados na planilha.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="glass-card mb-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+            <h5 class="text-white mb-0"><i class="fas fa-flag me-2 text-warning"></i>Status de conclusão</h5>
+            <small class="text-white-50">Último status registrado</small>
+        </div>
+        <div class="status-chips">
+            {% for status in metricas.status %}
+            <div class="chip">
+                <strong>{{ status.nome }}</strong>
+                <span>{{ status.quantidade }} · {{ status.percentual }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="glass-card">
+        <div class="table-responsive concluidas-table">
+            <table class="table table-dark table-striped table-hover align-middle text-center">
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort-index="0" data-sort-type="text">
+                            <span class="header-label">Base <span class="sort-indicator"></span></span>
+                            <input name="col_base" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="0">
+                        </th>
+                        <th class="sortable" data-sort-index="1" data-sort-type="text">
+                            <span class="header-label">Obra <span class="sort-indicator"></span></span>
+                            <input name="col_obra" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="1">
+                        </th>
+                        <th class="sortable" data-sort-index="2" data-sort-type="text">
+                            <span class="header-label">Status <span class="sort-indicator"></span></span>
+                            <input name="col_status" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="2">
+                        </th>
+                        <th class="sortable" data-sort-index="3" data-sort-type="number">
+                            <span class="header-label">Qtd Prog <span class="sort-indicator"></span></span>
+                            <input name="col_qtd" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="3">
+                        </th>
+                        <th class="sortable" data-sort-index="4" data-sort-type="date">
+                            <span class="header-label">Início <span class="sort-indicator"></span></span>
+                            <input name="col_inicio" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="4">
+                        </th>
+                        <th class="sortable" data-sort-index="5" data-sort-type="date">
+                            <span class="header-label">Conclusão <span class="sort-indicator"></span></span>
+                            <input name="col_conc" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="5">
+                        </th>
+                        <th class="sortable" data-sort-index="6" data-sort-type="week">
+                            <span class="header-label">Início Sem <span class="sort-indicator"></span></span>
+                            <input name="col_inic_sem" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="6">
+                        </th>
+                        <th class="sortable" data-sort-index="7" data-sort-type="week">
+                            <span class="header-label">Conclusão Sem <span class="sort-indicator"></span></span>
+                            <input name="col_conc_sem" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="7">
+                        </th>
+                        <th class="sortable" data-sort-index="8" data-sort-type="text">
+                            <span class="header-label">Prog <span class="sort-indicator"></span></span>
+                            <input name="col_prog" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="8">
+                        </th>
+                        <th class="sortable" data-sort-index="9" data-sort-type="currency">
+                            <span class="header-label">AND <span class="sort-indicator"></span></span>
+                            <input name="col_and" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="9">
+                        </th>
+                        <th class="sortable" data-sort-index="10" data-sort-type="currency">
+                            <span class="header-label">Valor <span class="sort-indicator"></span></span>
+                            <input name="col_valor" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="10">
+                        </th>
+                        <th class="sortable" data-sort-index="11" data-sort-type="date">
+                            <span class="header-label">Vizita <span class="sort-indicator"></span></span>
+                            <input name="col_vizita" class="form-control form-control-sm mt-1" placeholder="Filtrar" data-column-filter="11">
+                        </th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for obra in obras %}
+                    <tr>
+                        <td>{{ obra.base }}</td>
+                        <td class="text-info fw-semibold text-center">{{ obra.obra }}</td>
+                        <td>{{ obra.status }}</td>
+                        <td>{{ obra.qtd_prog }}</td>
+                        <td>{{ obra.inic|data_curta }}</td>
+                        <td>{{ obra.conc|data_curta }}</td>
+                        <td>{{ obra.inic_sem }}</td>
+                        <td>{{ obra.conc_sem }}</td>
+                        <td>{{ obra.prog }}</td>
+                        <td>{{ obra.andamento|brl }}</td>
+                        <td>{{ obra.valor|brl }}</td>
+                        <td>{{ obra.vizita|data_curta }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="table-controls d-flex flex-wrap justify-content-between align-items-center">
+            <div class="text-white-50 small" id="table-summary">{{ obras|length }} registro(s) carregados.</div>
+            <div class="d-flex flex-wrap align-items-center gap-3">
+                <label class="text-white-50 small d-flex align-items-center gap-2 mb-0">
+                    Por página
+                    <select id="page-size" class="form-select form-select-sm bg-transparent text-white">
+                        <option value="10">10</option>
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                    </select>
+                </label>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-light" type="button" id="prev-page">Anterior</button>
+                    <span class="btn btn-outline-light disabled" id="page-info">1 / 1</span>
+                    <button class="btn btn-outline-light" type="button" id="next-page">Próxima</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="glass-card text-center py-5 text-white-50">
+        Nenhuma obra concluída foi carregada. Sincronize ou importe o Excel atualizado.
+    </div>
+    {% endif %}
 </div>
+<style>
+    .metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+    }
+    .metric-card {
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 16px;
+        color: #e2e8f0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-height: 100px;
+    }
+    .metric-card span {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #94a3b8;
+    }
+    .metric-card strong {
+        font-size: 1.4rem;
+        color: #fff;
+    }
+    .metric-card small {
+        font-size: 0.75rem;
+        color: #94a3b8;
+    }
+    .filter-form label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #94a3b8;
+        margin-bottom: 4px;
+    }
+    .filter-form .form-control,
+    .filter-form .form-select {
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #e2e8f0;
+    }
+    .filter-form .form-control::placeholder {
+        color: #64748b;
+    }
+    .filter-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+    }
+    .filter-actions {
+        margin-top: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .metric-card.accent {
+        background: linear-gradient(125deg, rgba(56, 189, 248, 0.18), rgba(59, 130, 246, 0.35));
+        border-color: rgba(59, 130, 246, 0.4);
+        box-shadow: 0 10px 25px rgba(15, 23, 42, 0.35);
+    }
+    .attention-card {
+        border: 1px solid rgba(251, 191, 36, 0.4);
+        box-shadow: 0 10px 30px rgba(251, 191, 36, 0.1);
+    }
+    .dual-section {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 16px;
+    }
+    .distribution-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .distribution-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #e2e8f0;
+    }
+    .distribution-row .label {
+        min-width: 80px;
+        font-weight: 600;
+    }
+    .distribution-row .value {
+        font-size: 0.85rem;
+        color: #94a3b8;
+        min-width: 90px;
+        text-align: right;
+    }
+    .distribution-row.value-row .value {
+        font-weight: 600;
+        color: #e2e8f0;
+        min-width: 140px;
+    }
+    .distribution-row.value-row .value small {
+        display: block;
+        font-weight: 400;
+        font-size: 0.7rem;
+        color: #94a3b8;
+    }
+    .status-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .status-chips .chip {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 999px;
+        padding: 8px 14px;
+        display: flex;
+        flex-direction: column;
+        min-width: 140px;
+        color: #e2e8f0;
+    }
+    .status-chips .chip strong {
+        font-size: 0.85rem;
+        text-transform: uppercase;
+    }
+    .status-chips .chip span {
+        font-size: 0.75rem;
+        color: #94a3b8;
+    }
+    .concluidas-table table {
+        min-width: 900px;
+    }
+    .concluidas-table th {
+        text-transform: uppercase;
+        font-size: 0.7rem;
+        letter-spacing: 0.08em;
+        text-align: center;
+        vertical-align: top;
+    }
+    .concluidas-table th input {
+        text-transform: none;
+    }
+    .concluidas-table th .header-label {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+    }
+    .sortable {
+        cursor: pointer;
+    }
+    .sort-indicator {
+        font-size: 0.7rem;
+        opacity: 0.4;
+    }
+    .sortable.sorting-asc .sort-indicator::after {
+        content: '▲';
+        margin-left: 2px;
+        color: #38bdf8;
+    }
+    .sortable.sorting-desc .sort-indicator::after {
+        content: '▼';
+        margin-left: 2px;
+        color: #38bdf8;
+    }
+    .sortable:not(.sorting-asc):not(.sorting-desc) .sort-indicator::after {
+        content: '↕';
+        margin-left: 2px;
+    }
+    .concluidas-table td {
+        font-size: 0.85rem;
+        vertical-align: middle;
+        text-align: center;
+    }
+    .concluidas-table tbody tr:hover {
+        background: rgba(88, 166, 255, 0.08);
+    }
+    .table-controls {
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+        padding-top: 12px;
+        margin-top: 12px;
+    }
+</style>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        var storage = {
+            get: function (key) {
+                try {
+                    return window.localStorage ? window.localStorage.getItem(key) : null;
+                } catch (error) {
+                    console.warn('Armazenamento indisponível', error);
+                    return null;
+                }
+            },
+            set: function (key, value) {
+                try {
+                    if (window.localStorage) {
+                        window.localStorage.setItem(key, value);
+                    }
+                } catch (error) {
+                    console.warn('Não foi possível salvar preferências', error);
+                }
+            }
+        };
+        document.querySelectorAll('[data-progress-width]').forEach(function (bar) {
+            var width = parseFloat(bar.getAttribute('data-progress-width'));
+            if (Number.isFinite(width)) {
+                bar.style.width = width + '%';
+            }
+        });
+
+        var toggleBtn = document.getElementById('toggle-pendentes');
+        var container = document.getElementById('pendentes-container');
+        if (toggleBtn && container) {
+            toggleBtn.addEventListener('click', function () {
+                var isHidden = container.classList.toggle('d-none');
+                toggleBtn.innerHTML = isHidden ? '<i class="fas fa-chevron-down me-1"></i>Mostrar' : '<i class="fas fa-chevron-up me-1"></i>Ocultar';
+            });
+        }
+
+        var FILTER_STORAGE_KEY = 'concluidas-filtros-v2';
+        var filterForm = document.querySelector('.filter-form');
+        if (filterForm) {
+            var saved = storage.get(FILTER_STORAGE_KEY);
+            if (!window.location.search && saved) {
+                try {
+                    var parsed = JSON.parse(saved);
+                    if (parsed && typeof parsed === 'object') {
+                        Object.entries(parsed).forEach(function (_a) {
+                            var key = _a[0], value = _a[1];
+                            if (filterForm.elements[key] && value !== undefined) {
+                                filterForm.elements[key].value = value;
+                            }
+                        });
+                    }
+                } catch (e) {
+                    console.warn('Falha ao restaurar filtros', e);
+                }
+            }
+            var persistFilters = function () {
+                var data = {};
+                var formData = new FormData(filterForm);
+                formData.forEach(function (value, key) {
+                    data[key] = value;
+                });
+                storage.set(FILTER_STORAGE_KEY, JSON.stringify(data));
+            };
+            filterForm.addEventListener('change', persistFilters);
+            filterForm.addEventListener('submit', persistFilters);
+            var shareButton = document.getElementById('share-view');
+            if (shareButton) {
+                shareButton.addEventListener('click', function () {
+                    var params = new URLSearchParams();
+                    var formData = new FormData(filterForm);
+                    formData.forEach(function (value, key) {
+                        if (value) {
+                            params.append(key, value);
+                        }
+                    });
+                    var shareUrl = window.location.origin + window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+                    var fallback = function () {
+                        window.prompt('Copie o link abaixo', shareUrl);
+                    };
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(shareUrl).then(function () {
+                            shareButton.innerHTML = '<i class="fas fa-check me-1"></i>Link copiado';
+                            setTimeout(function () {
+                                shareButton.innerHTML = '<i class="fas fa-link me-1"></i>Copiar link';
+                            }, 2000);
+                        }).catch(fallback);
+                    } else {
+                        fallback();
+                    }
+                });
+            }
+        }
+
+        var table = document.querySelector('.concluidas-table table');
+        if (table) {
+            var tbody_1 = table.querySelector('tbody');
+            var allRows_1 = Array.from(tbody_1.querySelectorAll('tr'));
+            var columnFilters_1 = document.querySelectorAll('[data-column-filter]');
+            var headers_1 = table.querySelectorAll('th[data-sort-index]');
+            var pageSizeSelect_1 = document.getElementById('page-size');
+            var summaryEl_1 = document.getElementById('table-summary');
+            var prevBtn_1 = document.getElementById('prev-page');
+            var nextBtn_1 = document.getElementById('next-page');
+            var pageInfo_1 = document.getElementById('page-info');
+            var TABLE_PREF_KEY = 'concluidas-table-pref';
+            var prefs = {};
+            try {
+                prefs = JSON.parse(storage.get(TABLE_PREF_KEY) || '{}');
+            } catch (e) {
+                prefs = {};
+            }
+            if (pageSizeSelect_1 && prefs.pageSize) {
+                pageSizeSelect_1.value = prefs.pageSize;
+            }
+            var state_1 = {
+                rows: allRows_1,
+                sortIndex: null,
+                sortDir: 'asc',
+                page: 1,
+                pageSize: parseInt((pageSizeSelect_1 ? pageSizeSelect_1.value : '20'), 10)
+            };
+            var normalize = function (value, type) {
+                var text = (value || '').toString().trim();
+                if (!text) {
+                    return type === 'text' ? '' : 0;
+                }
+                switch (type) {
+                    case 'number':
+                        return parseFloat(text.replace(',', '.')) || 0;
+                    case 'currency':
+                        var cleaned = text.replace(/[^0-9,-]/g, '').replace('.', '').replace(',', '.');
+                        return parseFloat(cleaned) || 0;
+                    case 'date':
+                        var parts = text.split('/');
+                        if (parts.length === 3) {
+                            var parsed = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+                            return parsed.getTime() || 0;
+                        }
+                        var ms = Date.parse(text);
+                        return Number.isNaN(ms) ? 0 : ms;
+                    case 'week':
+                        var digits = text.replace(/[^0-9]/g, '');
+                        return parseInt(digits, 10) || 0;
+                    default:
+                        return text.toLowerCase();
+                }
+            };
+            var applyFilters = function () {
+                return state_1.rows.filter(function (row) {
+                    return Array.from(columnFilters_1).every(function (input) {
+                        var term = input.value.trim().toLowerCase();
+                        if (!term) {
+                            return true;
+                        }
+                        var idx = parseInt(input.dataset.columnFilter, 10);
+                        var cell = row.children[idx];
+                        return cell && cell.innerText.toLowerCase().includes(term);
+                    });
+                });
+            };
+            var sortRows = function (rows) {
+                if (state_1.sortIndex === null) {
+                    return rows.slice();
+                }
+                var header = table.querySelector('th[data-sort-index="' + state_1.sortIndex + '"]');
+                var sortType = (header === null || header === void 0 ? void 0 : header.dataset.sortType) || 'text';
+                return rows.slice().sort(function (a, b) {
+                    var aText = a.children[state_1.sortIndex] ? a.children[state_1.sortIndex].innerText : '';
+                    var bText = b.children[state_1.sortIndex] ? b.children[state_1.sortIndex].innerText : '';
+                    var aValue = normalize(aText, sortType);
+                    var bValue = normalize(bText, sortType);
+                    if (aValue < bValue) {
+                        return state_1.sortDir === 'asc' ? -1 : 1;
+                    }
+                    if (aValue > bValue) {
+                        return state_1.sortDir === 'asc' ? 1 : -1;
+                    }
+                    return 0;
+                });
+            };
+            var render = function () {
+                var filtered = applyFilters();
+                var sorted = sortRows(filtered);
+                var total = sorted.length;
+                var totalPages = Math.max(1, Math.ceil(total / state_1.pageSize));
+                state_1.page = Math.min(state_1.page, totalPages);
+                var start = (state_1.page - 1) * state_1.pageSize;
+                var paginated = sorted.slice(start, start + state_1.pageSize);
+                tbody_1.innerHTML = '';
+                paginated.forEach(function (row) { return tbody_1.appendChild(row); });
+                if (summaryEl_1) {
+                    summaryEl_1.textContent = total
+                        ? 'Exibindo ' + (total ? start + 1 : 0) + ' - ' + (start + paginated.length) + ' de ' + total + ' registro(s).'
+                        : 'Nenhum registro encontrado.';
+                }
+                if (pageInfo_1) {
+                    pageInfo_1.textContent = state_1.page + ' / ' + totalPages;
+                }
+                if (prevBtn_1) {
+                    prevBtn_1.disabled = state_1.page === 1;
+                }
+                if (nextBtn_1) {
+                    nextBtn_1.disabled = state_1.page === totalPages || total === 0;
+                }
+            };
+            columnFilters_1.forEach(function (input) {
+                input.addEventListener('input', function () {
+                    state_1.page = 1;
+                    render();
+                });
+            });
+            headers_1.forEach(function (header) {
+                header.addEventListener('click', function (event) {
+                    if (event.target.tagName === 'INPUT') {
+                        return;
+                    }
+                    var index = parseInt(header.dataset.sortIndex, 10);
+                    if (state_1.sortIndex === index) {
+                        state_1.sortDir = state_1.sortDir === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        state_1.sortIndex = index;
+                        state_1.sortDir = 'asc';
+                    }
+                    headers_1.forEach(function (h) { return h.classList.remove('sorting-asc', 'sorting-desc'); });
+                    header.classList.add(state_1.sortDir === 'asc' ? 'sorting-asc' : 'sorting-desc');
+                    render();
+                });
+            });
+            if (pageSizeSelect_1) {
+                pageSizeSelect_1.addEventListener('change', function () {
+                    state_1.pageSize = parseInt(pageSizeSelect_1.value, 10) || 20;
+                    storage.set(TABLE_PREF_KEY, JSON.stringify({ pageSize: state_1.pageSize }));
+                    state_1.page = 1;
+                    render();
+                });
+            }
+            if (prevBtn_1) {
+                prevBtn_1.addEventListener('click', function () {
+                    if (state_1.page > 1) {
+                        state_1.page -= 1;
+                        render();
+                    }
+                });
+            }
+            if (nextBtn_1) {
+                nextBtn_1.addEventListener('click', function () {
+                    state_1.page += 1;
+                    render();
+                });
+            }
+            render();
+        }
+    });
+</script>
 {% endblock %}
